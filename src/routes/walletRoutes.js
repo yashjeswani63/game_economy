@@ -4,5 +4,6 @@ const WalletController = require('../controllers/walletController');
 const controller = new WalletController();
 
 router.get('/health', controller.health.bind(controller));
+router.post('/wallets/:playerId/credit', controller.credit.bind(controller));
 
 module.exports = router;
