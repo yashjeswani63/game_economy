@@ -7,4 +7,5 @@ router.get('/health', controller.health.bind(controller));
 router.post('/wallets/:playerId/credit', controller.credit.bind(controller));
 
 router.post('/wallets/:playerId/purchase', controller.purchase.bind(controller));
+router.post('/rewards/:rewardId/claim', controller.claimReward.bind(controller));
 module.exports = router;

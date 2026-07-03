@@ -8,6 +8,21 @@ function generateIdempotencyKey(req) {
 }
 
 class WalletController {
+  async claimReward(req, res, next) {
+    try {
+      const { rewardId } = req.params;
+      const { playerId } = req.body;
+      const idempotencyKey = generateIdempotencyKey(req);
+      const result = await this.walletService.claimReward(playerId, rewardId, idempotencyKey);
+      if (result.fromCache) {
+        const { statusCode, fromCache, ...body } = result;
+        return res.status(statusCode || 200).json(body);
+      }
+      res.status(200).json({ success: true, balance: result.balance, rewardId: result.rewardId });
+    } catch (error) {
+      next(error);
+    }
+  }
   async purchase(req, res, next) {
     try {
       const { playerId } = req.params;

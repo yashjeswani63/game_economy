@@ -22,6 +22,12 @@ describe('Wallet API Tests - Credit Feature Only', () => {
     await ensureDbInitialized();
   });
 
+  test('should claim reward for first time', async () => {
+    const response = await request(app).post('/v1/rewards/daily_bonus/claim').send({ playerId: 'player1' }).expect(200);
+    expect(response.body.success).toBe(true);
+  });
+});
+
   test('should reject purchase with insufficient funds', async () => {
     await request(app).post('/v1/wallets/player1/purchase').send({ itemId: 'sword', price: 100 }).expect(400);
   });

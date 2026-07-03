@@ -24,6 +24,62 @@ function getQuery(db, sql, params = []) {
 }
 
 class WalletService {
+  async claimReward(playerId, rewardId, idempotencyKey) {
+    return this.executeSerialized(async () => {
+      const db = await this.getDb();
+      const existing = await this.resolveIdempotency(idempotencyKey);
+      if (existing) return existing;
+
+      let inTransaction = false;
+      try {
+        await new Promise((resolve, reject) => {
+          db.run('BEGIN IMMEDIATE TRANSACTION', (err) => {
+            if (err) reject(err);
+            else { inTransaction = true; resolve(); }
+          });
+        });
+
+        const wallet = await getQuery(db, 'SELECT balance FROM wallets WHERE player_id = ?', [playerId]);
+        if (!wallet) {
+          await runQuery(db, 'INSERT INTO wallets (player_id, balance) VALUES (?, 0)', [playerId]);
+        }
+
+        const existingClaim = await getQuery(db, 'SELECT claimed_at FROM claimed_rewards WHERE player_id = ? AND reward_id = ?', [playerId, rewardId]);
+        if (existingClaim) throw new ValidationError('Reward already claimed');
+
+        const rewardAmount = 100;
+        await runQuery(db, 'UPDATE wallets SET balance = balance + ?, updated_at = strftime("%s", "now") WHERE player_id = ?', [rewardAmount, playerId]);
+        await runQuery(db, 'INSERT INTO claimed_rewards (player_id, reward_id) VALUES (?, ?)', [playerId, rewardId]);
+
+        const reason = `Claim of reward ${rewardId}`;
+        await runQuery(db, `INSERT INTO transaction_ledger (player_id, transaction_type, amount, reward_id, reason, idempotency_key) VALUES (?, 'claim', ?, ?, ?, ?)`, [playerId, rewardAmount, rewardId, reason, idempotencyKey]);
+
+        const updated = await getQuery(db, 'SELECT balance FROM wallets WHERE player_id = ?', [playerId]);
+        await new Promise((resolve, reject) => {
+          db.run('COMMIT', (err) => {
+            if (err) reject(err);
+            else { inTransaction = false; resolve(); }
+          });
+        });
+
+        const result = { success: true, balance: updated.balance, rewardId: rewardId };
+        await this.storeIdempotencyResult(idempotencyKey, result, 200);
+        return result;
+      } catch (error) {
+        if (inTransaction) {
+          await new Promise(resolve => db.run('ROLLBACK', () => resolve()));
+        }
+        const isValidationError = error instanceof ValidationError || error.name === 'ValidationError' || error.statusCode === 400;
+        if (isValidationError) {
+          const errorResult = { success: false, error: error.message };
+          await this.storeIdempotencyResult(idempotencyKey, errorResult, 400);
+        } else {
+          await this.deleteIdempotencyKey(idempotencyKey);
+        }
+        throw error;
+      }
+    });
+  }
   async purchase(playerId, itemId, price, idempotencyKey) {
     return this.executeSerialized(async () => {
       const db = await this.getDb();
