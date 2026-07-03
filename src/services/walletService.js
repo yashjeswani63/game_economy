@@ -24,6 +24,62 @@ function getQuery(db, sql, params = []) {
 }
 
 class WalletService {
+  async purchase(playerId, itemId, price, idempotencyKey) {
+    return this.executeSerialized(async () => {
+      const db = await this.getDb();
+      const existing = await this.resolveIdempotency(idempotencyKey);
+      if (existing) return existing;
+
+      let inTransaction = false;
+      try {
+        await new Promise((resolve, reject) => {
+          db.run('BEGIN IMMEDIATE TRANSACTION', (err) => {
+            if (err) reject(err);
+            else { inTransaction = true; resolve(); }
+          });
+        });
+
+        const wallet = await getQuery(db, 'SELECT balance FROM wallets WHERE player_id = ?', [playerId]);
+        if (!wallet) throw new ValidationError('Wallet not found');
+        if (wallet.balance < price) throw new ValidationError('Insufficient funds');
+
+        const existingItem = await getQuery(db, 'SELECT id FROM inventory WHERE player_id = ? AND item_id = ?', [playerId, itemId]);
+        if (existingItem) throw new ValidationError('Item already owned');
+
+        await runQuery(db, 'UPDATE wallets SET balance = balance - ?, updated_at = strftime("%s", "now") WHERE player_id = ?', [price, playerId]);
+        await runQuery(db, 'INSERT INTO inventory (player_id, item_id) VALUES (?, ?)', [playerId, itemId]);
+
+        const updated = await getQuery(db, 'SELECT balance FROM wallets WHERE player_id = ?', [playerId]);
+        if (updated.balance < 0) throw new ValidationError('Negative balance after purchase');
+
+        const reason = `Purchase of item ${itemId}`;
+        await runQuery(db, `INSERT INTO transaction_ledger (player_id, transaction_type, amount, item_id, reason, idempotency_key) VALUES (?, 'purchase', ?, ?, ?, ?)`, [playerId, price, itemId, reason, idempotencyKey]);
+
+        await new Promise((resolve, reject) => {
+          db.run('COMMIT', (err) => {
+            if (err) reject(err);
+            else { inTransaction = false; resolve(); }
+          });
+        });
+
+        const result = { success: true, balance: updated.balance, itemId: itemId };
+        await this.storeIdempotencyResult(idempotencyKey, result, 200);
+        return result;
+      } catch (error) {
+        if (inTransaction) {
+          await new Promise(resolve => db.run('ROLLBACK', () => resolve()));
+        }
+        const isValidationError = error instanceof ValidationError || error.name === 'ValidationError' || error.statusCode === 400;
+        if (isValidationError) {
+          const errorResult = { success: false, error: error.message };
+          await this.storeIdempotencyResult(idempotencyKey, errorResult, 400);
+        } else {
+          await this.deleteIdempotencyKey(idempotencyKey);
+        }
+        throw error;
+      }
+    });
+  }
   constructor() {}
 
   async executeSerialized(fn) {

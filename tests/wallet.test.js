@@ -21,6 +21,11 @@ describe('Wallet API Tests - Credit Feature Only', () => {
   beforeAll(async () => {
     await ensureDbInitialized();
   });
+
+  test('should reject purchase with insufficient funds', async () => {
+    await request(app).post('/v1/wallets/player1/purchase').send({ itemId: 'sword', price: 100 }).expect(400);
+  });
+});
   beforeEach(async () => {
     await clearDatabase();
   });
